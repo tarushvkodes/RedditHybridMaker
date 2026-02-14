@@ -92,7 +92,7 @@ class Qwen3Clone:
             return f"/mnt/{drive}{p[2:]}"
         return p
 
-    def _build_base_cmd(self, chunk: str, out_wav: str):
+    def _build_base_cmd(self, chunk: str, out_wav: str, max_new_tokens: int = 220):
         if self.use_wsl:
             return [
                 "wsl.exe",
@@ -110,7 +110,7 @@ class Qwen3Clone:
                 "--ref-text-file",
                 self._to_wsl_path(self.ref_text_file),
                 "--max-new-tokens",
-                "320",
+                str(max_new_tokens),
                 "--out",
                 self._to_wsl_path(out_wav),
             ]
@@ -126,10 +126,32 @@ class Qwen3Clone:
             "--ref-text-file",
             self.ref_text_file,
             "--max-new-tokens",
-            "320",
+            str(max_new_tokens),
             "--out",
             out_wav,
         ]
+
+    def _write_silence_wav(self, wav_path: Path, duration_sec: float = 0.4):
+        subprocess.run(
+            [
+                self.ffmpeg_bin,
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=24000:cl=mono",
+                "-t",
+                f"{max(0.12, float(duration_sec)):.3f}",
+                "-ac",
+                "1",
+                "-ar",
+                "24000",
+                str(wav_path),
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
     def run(self, text: str, filepath: str, random_voice: bool = False):
         out_mp3 = Path(filepath)
@@ -151,22 +173,32 @@ class Qwen3Clone:
 
             for i, chunk in enumerate(chunks):
                 tmp_wav = tmp_dir / f"part_{i:02d}.wav"
-                base_cmd = self._build_base_cmd(chunk, str(tmp_wav))
 
-                try:
-                    subprocess.run(
-                        base_cmd + ["--device", "cuda:0", "--dtype", "bfloat16"],
-                        check=True,
-                        env=env,
-                        timeout=220,
-                    )
-                except Exception:
-                    subprocess.run(
-                        base_cmd + ["--device", "cpu", "--dtype", "float32"],
-                        check=True,
-                        env=env,
-                        timeout=300,
-                    )
+                attempts = [
+                    ("cuda:0", "bfloat16", 220, 420),
+                    ("cuda:0", "float16", 180, 360),
+                    ("cpu", "float32", 180, 420),
+                ]
+
+                success = False
+                for device, dtype, max_tokens, timeout_sec in attempts:
+                    base_cmd = self._build_base_cmd(chunk, str(tmp_wav), max_new_tokens=max_tokens)
+                    try:
+                        subprocess.run(
+                            base_cmd + ["--device", device, "--dtype", dtype],
+                            check=True,
+                            env=env,
+                            timeout=timeout_sec,
+                        )
+                        success = True
+                        break
+                    except Exception:
+                        continue
+
+                if not success:
+                    # Keep pipeline alive on rare model hangs/failures.
+                    self._write_silence_wav(tmp_wav)
+
                 wav_paths.append(tmp_wav)
 
             list_file = tmp_dir / "list.txt"
