@@ -292,6 +292,9 @@ def make_final_video(
     console.log(f"[bold green] Video Will Be: {length} Seconds Long")
 
     screenshot_width = int((W * 50) // 100)
+    # Prevent tall/vertical screenshots from overflowing in horizontal renders.
+    # Keep a safe max height so image content doesn't overlap surrounding UI/text.
+    screenshot_height = int((H * 88) // 100)
     audio = ffmpeg.input(f"assets/temp/{reddit_id}/audio.mp3")
     final_audio = merge_background_audio(audio, reddit_id)
 
@@ -317,7 +320,7 @@ def make_final_video(
     image_clips.insert(
         0,
         ffmpeg.input(f"assets/temp/{reddit_id}/png/title.png")["v"].filter(
-            "scale", screenshot_width, -1
+            "scale", screenshot_width, screenshot_height, force_original_aspect_ratio="decrease"
         ).filter("eq", contrast=1.03, saturation=1.04),
     )
 
@@ -367,7 +370,7 @@ def make_final_video(
             # Single image for post content
             image_clips.append(
                 ffmpeg.input(f"assets/temp/{reddit_id}/png/story_content.png").filter(
-                    "scale", screenshot_width, -1
+                    "scale", screenshot_width, screenshot_height, force_original_aspect_ratio="decrease"
                 ).filter("eq", contrast=1.03, saturation=1.04)
             )
             # Overlay post content (after title finishes)
@@ -396,7 +399,7 @@ def make_final_video(
             for i in range(post_audio_count):
                 image_clips.append(
                     ffmpeg.input(f"assets/temp/{reddit_id}/png/img{i}.png")["v"].filter(
-                        "scale", screenshot_width, -1
+                        "scale", screenshot_width, screenshot_height, force_original_aspect_ratio="decrease"
                     )
                 )
                 background_clip = background_clip.overlay(
@@ -415,7 +418,7 @@ def make_final_video(
             if exists(comment_img_path):
                 image_clips.append(
                     ffmpeg.input(comment_img_path)["v"].filter(
-                        "scale", screenshot_width, -1
+                        "scale", screenshot_width, screenshot_height, force_original_aspect_ratio="decrease"
                     )
                 )
                 background_clip = background_clip.overlay(
@@ -442,7 +445,7 @@ def make_final_video(
             image_clips.insert(
                 1,
                 ffmpeg.input(f"assets/temp/{reddit_id}/png/story_content.png").filter(
-                    "scale", screenshot_width, -1
+                    "scale", screenshot_width, screenshot_height, force_original_aspect_ratio="decrease"
                 ).filter("eq", contrast=1.03, saturation=1.04),
             )
             # Overlay title first
@@ -472,7 +475,7 @@ def make_final_video(
             for i in track(range(0, number_of_clips + 1), "Collecting the image files..."):
                 image_clips.append(
                     ffmpeg.input(f"assets/temp/{reddit_id}/png/img{i}.png")["v"].filter(
-                        "scale", screenshot_width, -1
+                        "scale", screenshot_width, screenshot_height, force_original_aspect_ratio="decrease"
                     )
                 )
                 background_clip = background_clip.overlay(
@@ -486,7 +489,7 @@ def make_final_video(
         for i in range(0, number_of_clips + 1):
             image_clips.append(
                 ffmpeg.input(f"assets/temp/{reddit_id}/png/comment_{i}.png")["v"].filter(
-                    "scale", screenshot_width, -1
+                    "scale", screenshot_width, screenshot_height, force_original_aspect_ratio="decrease"
                 ).filter("eq", contrast=1.03, saturation=1.04)
             )
             image_overlay = image_clips[i].filter("colorchannelmixer", aa=opacity)
