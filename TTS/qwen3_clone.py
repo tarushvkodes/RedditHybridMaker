@@ -29,8 +29,7 @@ class Qwen3Clone:
             "QWEN3_SOX_DIR",
             r"C:\Users\tarus\AppData\Local\Microsoft\WinGet\Packages\ChrisBagwell.SoX_Microsoft.Winget.Source_8wekyb3d8bbwe\sox-14.4.2",
         )
-        # Default to native Windows execution to avoid WSL SoX dependency issues.
-        self.use_wsl = os.getenv("QWEN3_USE_WSL", "0").strip().lower() in {"1", "true", "yes"}
+        self.use_wsl = os.getenv("QWEN3_USE_WSL", "1").strip().lower() in {"1", "true", "yes"}
         self.wsl_distro = os.getenv("QWEN3_WSL_DISTRO", "Ubuntu-24.04")
         self.wsl_python = os.getenv("QWEN3_WSL_PYTHON", "/home/tarushv/.venvs/rhm/bin/python")
 
