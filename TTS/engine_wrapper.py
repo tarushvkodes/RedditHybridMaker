@@ -6,9 +6,20 @@ from typing import Tuple
 
 import numpy as np
 import translators
-from moviepy.audio.AudioClip import AudioClip
-from moviepy.audio.fx.volumex import volumex
-from moviepy.editor import AudioFileClip
+try:
+    from moviepy.audio.AudioClip import AudioClip
+except ModuleNotFoundError:
+    from moviepy import AudioClip
+
+try:
+    from moviepy.audio.fx.volumex import volumex
+except ModuleNotFoundError:
+    volumex = None
+
+try:
+    from moviepy.editor import AudioFileClip
+except ModuleNotFoundError:
+    from moviepy import AudioFileClip
 from rich.progress import track
 
 from utils import settings
@@ -290,11 +301,16 @@ class TTSEngine:
             self._make_silence_file(f"{self.path}/{filename}.mp3", base_word_silence)
             return
 
+        if len(part_files) == 1:
+            os.replace(part_files[0], f"{self.path}/{filename}.mp3")
+            return
+
         list_file = f"{self.path}/{filename}.parts.txt"
+        out_file = os.path.abspath(f"{self.path}/{filename}.mp3").replace("\\", "/")
         with open(list_file, "w", encoding="utf-8") as f:
             for p in part_files:
-                escaped = p.replace("'", "'\\''")
-                f.write(f"file '{escaped}'\n")
+                normalized = os.path.abspath(p).replace("\\", "/").replace("'", "\\'")
+                f.write(f"file '{normalized}'\n")
 
         subprocess.run(
             [
@@ -310,11 +326,12 @@ class TTSEngine:
                 "libmp3lame",
                 "-q:a",
                 "4",
-                f"{self.path}/{filename}.mp3",
+                out_file,
             ],
             check=True,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
         )
 
         for p in part_files:
@@ -355,8 +372,17 @@ class TTSEngine:
             duration=silence_duration,
             fps=44100,
         )
-        silence = volumex(silence, 0)
-        silence.write_audiofile(f"{self.path}/silence.mp3", fps=44100, verbose=False, logger=None)
+        if volumex is not None:
+            silence = volumex(silence, 0)
+        else:
+            try:
+                silence = silence.with_volume_scaled(0)
+            except AttributeError:
+                pass
+        try:
+            silence.write_audiofile(f"{self.path}/silence.mp3", fps=44100, verbose=False, logger=None)
+        except TypeError:
+            silence.write_audiofile(f"{self.path}/silence.mp3", fps=44100, logger=None)
 
 
 def process_text(text: str, clean: bool = True):
