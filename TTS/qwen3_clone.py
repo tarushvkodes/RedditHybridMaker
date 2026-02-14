@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import subprocess
@@ -32,6 +33,8 @@ class Qwen3Clone:
         self.use_wsl = os.getenv("QWEN3_USE_WSL", "1").strip().lower() in {"1", "true", "yes"}
         self.wsl_distro = os.getenv("QWEN3_WSL_DISTRO", "Ubuntu-24.04")
         self.wsl_python = os.getenv("QWEN3_WSL_PYTHON", "/home/tarushv/.venvs/rhm/bin/python")
+        self.worker_script = str(Path(__file__).with_name("qwen3_worker.py"))
+        self._workers = {}
 
     def _prepare_text(self, text: str) -> str:
         # Keep script fidelity as close to original pipeline as possible.
@@ -131,6 +134,73 @@ class Qwen3Clone:
             out_wav,
         ]
 
+    def _start_wsl_worker(self, device: str, dtype: str, env: dict):
+        key = (device, dtype)
+        proc = self._workers.get(key)
+        if proc and proc.poll() is None:
+            return proc
+
+        cmd = [
+            "wsl.exe",
+            "-d",
+            self.wsl_distro,
+            "--",
+            self.wsl_python,
+            self._to_wsl_path(self.worker_script),
+            "--device",
+            device,
+            "--dtype",
+            dtype,
+            "--language",
+            "English",
+            "--ref-audio",
+            self._to_wsl_path(self.ref_audio),
+            "--ref-text-file",
+            self._to_wsl_path(self.ref_text_file),
+        ]
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+            env=env,
+        )
+
+        ready = proc.stdout.readline().strip() if proc.stdout else ""
+        try:
+            payload = json.loads(ready) if ready else {}
+        except Exception:
+            payload = {}
+        if not payload.get("ready"):
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return None
+
+        self._workers[key] = proc
+        return proc
+
+    def _run_wsl_worker_request(self, proc, text: str, out_wav: str, max_tokens: int):
+        if not proc or proc.poll() is not None or not proc.stdin or not proc.stdout:
+            return False
+        req = {
+            "text": text,
+            "out": self._to_wsl_path(out_wav),
+            "language": "English",
+            "max_new_tokens": int(max_tokens),
+        }
+        proc.stdin.write(json.dumps(req) + "\n")
+        proc.stdin.flush()
+        resp = proc.stdout.readline().strip()
+        try:
+            payload = json.loads(resp) if resp else {}
+        except Exception:
+            payload = {}
+        return bool(payload.get("ok"))
+
     def _write_silence_wav(self, wav_path: Path, duration_sec: float = 0.4):
         subprocess.run(
             [
@@ -182,18 +252,27 @@ class Qwen3Clone:
 
                 success = False
                 for device, dtype, max_tokens, timeout_sec in attempts:
-                    base_cmd = self._build_base_cmd(chunk, str(tmp_wav), max_new_tokens=max_tokens)
-                    try:
-                        subprocess.run(
-                            base_cmd + ["--device", device, "--dtype", dtype],
-                            check=True,
-                            env=env,
-                            timeout=timeout_sec,
-                        )
-                        success = True
-                        break
-                    except Exception:
-                        continue
+                    if self.use_wsl:
+                        proc = self._start_wsl_worker(device, dtype, env)
+                        try:
+                            if proc and self._run_wsl_worker_request(proc, chunk, str(tmp_wav), max_tokens):
+                                success = True
+                                break
+                        except Exception:
+                            pass
+                    else:
+                        base_cmd = self._build_base_cmd(chunk, str(tmp_wav), max_new_tokens=max_tokens)
+                        try:
+                            subprocess.run(
+                                base_cmd + ["--device", device, "--dtype", dtype],
+                                check=True,
+                                env=env,
+                                timeout=timeout_sec,
+                            )
+                            success = True
+                            break
+                        except Exception:
+                            continue
 
                 if not success:
                     # Keep pipeline alive on rare model hangs/failures.
